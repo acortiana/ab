@@ -63,6 +63,13 @@ beyond `docker` and the standard tools of any Linux system.
 - **Host-root guard:** `cmd_create` exits with an error if the host is UID 0,
   because UID 0 would conflict with the container's `root` user during
   provisioning.
+- **`provision.d/` naming convention is run-parts style.** Active script
+  names contain only `[A-Za-z0-9_-]` (matched in `cmd_create` with `case
+  "$name" in *[!A-Za-z0-9_-]*) continue ;; esac`). This single rule does
+  triple duty: alphabetical ordering (hence the `NN-` prefix convention),
+  "disable via rename" (any suffix containing a dot, e.g. `.disabled`, is
+  skipped), and excluding `README.md`/documentation from execution — with no
+  extra special-casing needed.
 
 ## Conventions when modifying
 
@@ -91,5 +98,6 @@ section of the plan and the examples in `README.md`).
 
 ## Out of scope (do not implement)
 
-Networking/ports, extra env vars, additional volumes beyond `home/` and
-`bin/`, resource limits, multi-container, image builds, a `stop` subcommand.
+Networking/ports, extra env vars, additional volumes beyond `home/`, `bin/`
+and `provision.d/`, resource limits, multi-container, image builds, a `stop`
+subcommand.

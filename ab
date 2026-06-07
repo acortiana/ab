@@ -140,7 +140,7 @@ cmd_init() {
     if ask_yes_no "Enable Wayland support?"; then enable_wayland=true; else enable_wayland=false; fi
 
     # Persistent subdirectories on the host.
-    mkdir --parents home bin
+    mkdir --parents home bin provision.d
 
     # .env file actually read at runtime, with a comment for each key.
     cat > .env <<EOF
@@ -223,11 +223,80 @@ ENABLE_X11=false
 ENABLE_WAYLAND=false
 EOF
 
+    # README for provision.d/ (documentation only, never read by ab).
+    cat > provision.d/README.md <<'EOF'
+# provision.d/
+
+Scripts placed in this directory are executed **as root**, **in alphabetical
+order**, right after the container is created by `ab create` (before the
+command returns). They run in the foreground, attached to the same terminal:
+scripts that need user interaction behave exactly as if you typed the
+commands yourself.
+
+## Naming convention
+
+- Active scripts: filenames made up **only** of letters, digits, `_` and `-`
+  (e.g. `10-install-packages`, `20-clone-repo`). The leading number sets the
+  execution order; leave gaps (10, 20, 30, ...) to make room for future
+  insertions.
+- To temporarily disable a script **without deleting it**, rename it adding
+  any suffix that contains a dot (e.g. `10-install-packages.disabled`,
+  `.bak`, `.off`, ...): any filename containing a dot is skipped. This is
+  also why this README, and any other documentation placed here, is never
+  executed.
+- Each script must be executable (`chmod +x scriptname`) and start with a
+  shebang line (`#!/bin/sh`, `#!/usr/bin/env bash`, ...). The interpreter
+  must be available in the container image.
+
+## Rules
+
+- Scripts run **as root**, in the order given by their name.
+- Each script **must** end with `exit 0`. If any script exits with a
+  non-zero status, `ab create` stops immediately, reports an error, and
+  leaves the container running so you can inspect what happened (`ab root`
+  / `ab shell`). Destroy it with `ab destroy` before retrying `ab create`.
+
+## Example
+
+See `00-example.disabled` for a minimal working script, shipped already
+disabled so that a freshly initialized project doesn't run anything by
+default. To try it out:
+
+    mv 00-example.disabled 00-example
+    ab create
+EOF
+
+    # Example script: shipped disabled (the ".disabled" suffix contains a
+    # dot, so the naming convention above skips it) and already executable,
+    # so enabling it is a matter of a simple rename.
+    cat > provision.d/00-example.disabled <<'EOF'
+#!/bin/sh
+#
+# Example provisioning script: runs as root right after container creation.
+#
+# To activate it, rename this file removing the ".disabled" suffix (it's
+# already executable). To deactivate it again, rename it back, or add any
+# other suffix containing a dot. See README.md in this directory for the
+# full naming convention.
+
+set -e
+
+echo "Hello from provision.d/00-example!"
+echo "Running as: $(id -un) (uid=$(id -u))"
+
+# Add your provisioning commands here: install packages, clone repositories,
+# write configuration files, create system users, etc. Remember: this script
+# MUST end with "exit 0", otherwise 'ab create' will report an error.
+
+exit 0
+EOF
+    chmod +x provision.d/00-example.disabled
+
     echo
     echo "Project initialized:"
     echo "  - container: $container_name"
     echo "  - image:     $base_image"
-    echo "  - directory: home/ bin/ .env .env.example"
+    echo "  - directory: home/ bin/ provision.d/ .env .env.example"
     echo
     echo "Next step: 'ab create'."
 }
@@ -240,6 +309,9 @@ cmd_create() {
     if docker ps --all --format '{{.Names}}' | grep -qx "$CONTAINER_NAME"; then
         die "a container named '$CONTAINER_NAME' already exists. Run 'ab destroy' before recreating it."
     fi
+
+    [ -d provision.d ] \
+        || die "the 'provision.d' directory is missing (it should have been created by 'ab init'): this project looks corrupted."
 
     local host_uid host_gid
     host_uid=$(id -u)
@@ -259,6 +331,7 @@ cmd_create() {
         --name "$CONTAINER_NAME"
         --volume "$PWD/home:$effective_home"
         --volume "$PWD/bin:/usr/local/bin"
+        --volume "$PWD/provision.d:/usr/local/provision.d"
     )
 
     # Optional graphical flags.
@@ -326,6 +399,32 @@ cmd_create() {
             mkdir -p "/home/${USERNAME}"
         '
 
+    # Run provisioning scripts from provision.d/, in alphabetical order, as
+    # root, in the foreground and attached to this terminal (so scripts that
+    # need user interaction behave as if the commands were typed directly).
+    # Active scripts are filenames made up only of [A-Za-z0-9_-] (run-parts
+    # style): any name containing a dot (README.md, *.disabled, *.bak, ...)
+    # is skipped, which doubles as the "disable a script via rename"
+    # mechanism. Every script must end with "exit 0": on the first failure,
+    # 'ab create' stops and leaves the container running for inspection.
+    local mount_point="/usr/local/provision.d"
+    local script name
+    for script in "$PWD"/provision.d/*; do
+        [ -f "$script" ] || continue
+        name=$(basename "$script")
+        case "$name" in
+            *[!A-Za-z0-9_-]*) continue ;;
+        esac
+        [ -x "$script" ] \
+            || die "provisioning script 'provision.d/$name' is not executable. Run 'chmod +x provision.d/$name', or rename it (e.g. add '.disabled') to skip it."
+        echo "Running provisioning script '$name'..."
+        docker exec --interactive --tty \
+            --user root \
+            --workdir "$mount_point" \
+            "$CONTAINER_NAME" "$mount_point/$name" \
+            || die "provisioning script '$name' exited with an error: container '$CONTAINER_NAME' left running for inspection ('ab root' / 'ab shell'). Destroy it with 'ab destroy' before retrying 'ab create'."
+    done
+
     echo "Container '$CONTAINER_NAME' ready. Use 'ab shell' or 'ab root'."
 }
 
@@ -336,9 +435,9 @@ cmd_destroy() {
     if ! docker ps --all --format '{{.Names}}' | grep -qx "$CONTAINER_NAME"; then
         die "container '$CONTAINER_NAME' does not exist."
     fi
-    # Never touches home/, bin/, .env, .env.example or the host directory.
+    # Never touches home/, bin/, provision.d/, .env, .env.example or the host directory.
     docker rm --force "$CONTAINER_NAME" >/dev/null
-    echo "Container '$CONTAINER_NAME' destroyed. Host data (home/, bin/) is intact."
+    echo "Container '$CONTAINER_NAME' destroyed. Host data (home/, bin/, provision.d/) is intact."
 }
 
 # ==========================================================================

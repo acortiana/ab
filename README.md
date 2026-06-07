@@ -3,13 +3,14 @@
 `ab` is a small Bash CLI that simplifies the lifecycle of Docker containers
 used as **disposable, sandboxed environments**: interactive shell, testing,
 prototyping. It's a thin wrapper around `docker`, with data persisted on the
-host in `home/` and `bin/`.
+host in `home/`, `bin/` and `provision.d/`.
 
 - **Single executable**: one self-contained Bash script.
 - **No dependencies** beyond `docker` and the standard tools of any Linux system.
 - **KISS**: simple, readable code, modifiable even by non-programmers.
 - **Consistent UID/GID**: the user inside the container has the same UID/GID as
-  the host user, so files in `home/` and `bin/` have correct ownership without `chown`.
+  the host user, so files in `home/`, `bin/` and `provision.d/` have correct
+  ownership without `chown`.
 
 ## Requirements
 
@@ -54,7 +55,7 @@ ab init        # answer the questions (Enter = default)
 ab create      # create and start the container
 ab shell       # enter as an unprivileged user
 # ... work ...
-ab destroy     # remove the container; home/ and bin/ remain intact
+ab destroy     # remove the container; home/, bin/ and provision.d/ remain intact
 ```
 
 ## `ab init`
@@ -76,9 +77,10 @@ to accept it or type an alternative value.
 UID and GID are **not** configurable: they are read at runtime from the user
 running `ab` (`id -u` / `id -g`).
 
-`init` creates the `home/` and `bin/` subdirectories, the `.env` file (read at
-runtime) and the `.env.example` file (full documentation reference, never read
-by `ab`).
+`init` creates the `home/`, `bin/` and `provision.d/` subdirectories (the
+latter pre-populated with a `README.md` and a disabled example script — see
+"Container provisioning" below), the `.env` file (read at runtime) and the
+`.env.example` file (full documentation reference, never read by `ab`).
 
 ## Configuration (`.env`)
 
@@ -124,12 +126,35 @@ and can be enabled together.
   passes `WAYLAND_DISPLAY`/`XDG_RUNTIME_DIR`. This works because the container
   uses the same UID as the host.
 
+## Container provisioning (`provision.d/`)
+
+Right after the container is created, `ab create` runs the scripts found in
+`provision.d/`, **as root**, **in alphabetical order**, in the foreground and
+attached to the same terminal — so scripts that need user interaction behave
+exactly as if you had typed the commands yourself. This is the place to
+install packages, clone repositories, write configuration files, and so on.
+
+- Active scripts: executable files whose name contains only letters, digits,
+  `_` and `-` (e.g. `10-install-packages`). The leading number sets the
+  execution order; leave gaps (10, 20, 30, ...) for future insertions.
+- To temporarily disable a script, rename it adding any suffix that contains
+  a dot (e.g. `10-install-packages.disabled`): any name with a dot is
+  skipped — which is also why `README.md` is never executed.
+- Every script **must** end with `exit 0`. If one fails, `ab create` stops,
+  reports an error and **leaves the container running** so you can inspect it
+  (`ab root`/`ab shell`); destroy it with `ab destroy` before retrying.
+
+See `provision.d/README.md` (created by `ab init`) for the full naming
+convention and a working example script.
+
 ## Data persistence
 
 - `./home` is mounted at `/home/$USERNAME` inside the container.
 - `./bin` is mounted at `/usr/local/bin` (handy for placing scripts/executables).
-- `ab destroy` removes **only** the container: `home/`, `bin/`, `.env` and
-  `.env.example` are never touched.
+- `./provision.d` is mounted at `/usr/local/provision.d` (see "Container
+  provisioning" above).
+- `ab destroy` removes **only** the container: `home/`, `bin/`, `provision.d/`,
+  `.env` and `.env.example` are never touched.
 
 ## Out of scope
 
