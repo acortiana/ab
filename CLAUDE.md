@@ -1,88 +1,95 @@
 # CLAUDE.md
 
-Guida per lavorare su questo repository. Leggi anche `README.md` per l'uso utente.
+Guide for working on this repository. Also read `README.md` for user-facing usage.
 
-## Cos'è
+## What it is
 
-`ab` è una CLI Bash che fa da wrapper sottile attorno a `docker` per gestire
-container usa-e-getta. **Tutto il codice è nel singolo file `ab`** (eseguibile
-Bash autocontenuto). Non c'è build, non ci sono dipendenze oltre a `docker` e agli
-strumenti standard di un qualsiasi Linux.
+`ab` is a Bash CLI that acts as a thin wrapper around `docker` to manage
+disposable containers. **All the code lives in the single file `ab`** (a
+self-contained Bash executable). There is no build step and no dependencies
+beyond `docker` and the standard tools of any Linux system.
 
-## Principi NON negoziabili
+## Non-negotiable principles
 
-- **KISS.** Il target sono sistemisti/devops; il codice deve restare leggibile e
-  modificabile anche da chi non è programmatore esperto. Preferisci sempre la
-  soluzione più semplice e compatibile.
-- **Opzioni lunghe ovunque.** In ogni chiamata a comandi esterni (`docker`, `sed`,
-  `mkdir`, ecc.) usa la forma lunga dei flag dove esiste (`--detach` non `-d`,
-  `--volume` non `-v`, `--interactive --tty` non `-it`, `--name`, `--env`,
-  `--user`, ...). Rende il codice autoesplicativo. C'è un commento di testa che lo
-  ricorda: mantienilo valido.
-- **Un solo eseguibile.** Non introdurre file sorgente aggiuntivi né dipendenze.
-- **Preflight obbligatorio.** Ogni sottocomando che usa Docker passa prima da
-  `preflight_docker` (docker installato + daemon raggiungibile) e, tranne `init`,
-  da `require_project` (`.env` con `AB_PROJECT=true`).
+- **KISS.** The target audience is sysadmins/devops; the code must stay
+  readable and modifiable even by people who aren't expert programmers. Always
+  prefer the simplest, most compatible solution.
+- **Long-form options everywhere.** In every call to an external command
+  (`docker`, `sed`, `mkdir`, etc.) use the long form of flags where it exists
+  (`--detach` not `-d`, `--volume` not `-v`, `--interactive --tty` not `-it`,
+  `--name`, `--env`, `--user`, ...). It makes the code self-explanatory. There's
+  a header comment that states this: keep it accurate.
+- **A single executable.** Do not introduce additional source files or
+  dependencies.
+- **Mandatory preflight.** Every subcommand that uses Docker first goes through
+  `preflight_docker` (docker installed + daemon reachable) and, except for
+  `init`, through `require_project` (`.env` with `AB_PROJECT=true`).
 
-## Struttura di `ab`
+## Structure of `ab`
 
-1. Header + `set -euo pipefail` + costanti `DEFAULT_*`.
-2. Helper: `die`, `warn`, `usage`, `preflight_docker`, `require_project`,
+1. Header + `set -euo pipefail` + `DEFAULT_*` constants.
+2. Helpers: `die`, `warn`, `usage`, `preflight_docker`, `require_project`,
    `load_env`, `shell_quote`, `random_name`, `ask`, `ask_yes_no`.
-3. Sottocomandi: `cmd_init`, `cmd_create`, `cmd_destroy`, `cmd_shell`, `cmd_root`
-   (più gli helper `container_state`, `ensure_running`).
-4. `main` con il dispatch `case` su `$1`, in fondo `main "$@"`.
+3. Subcommands: `cmd_init`, `cmd_create`, `cmd_destroy`, `cmd_shell`, `cmd_root`
+   (plus the helpers `container_state`, `ensure_running`).
+4. `main` with the `case` dispatch on `$1`, with `main "$@"` at the bottom.
 
-`.env` è l'unica fonte di configurazione letta a runtime (`load_env` fa
-`set -a; . ./.env; set +a`). `.env.example` è solo documentazione, mai letto.
+`.env` is the only configuration source read at runtime (`load_env` does
+`set -a; . ./.env; set +a`). `.env.example` is documentation only, never read.
 
-## Decisioni di progetto importanti (contesto non ovvio)
+## Important design decisions (non-obvious context)
 
-- **Utente/gruppo nel container = quelli scelti in `.env`** (`USERNAME`/`GROUPNAME`),
-  **non** l'utente di default dell'immagine. UID/GID sono sempre quelli dell'host
-  (`id -u`/`id -g`), così l'ownership sui bind-mount è corretta senza `chown`.
-- **Provisioning via modifica diretta di `/etc/passwd` e `/etc/group`** (in
-  `cmd_create`, dentro un `docker exec ... sh -c '...'`). Scelto al posto di
-  `useradd`/`adduser` per avere **un solo code path portabile** su ogni distro,
-  Alpine inclusa (busybox non ha `useradd` senza `shadow`). Le `sed` rimuovono le
-  righe in conflitto (per nome o per UID/GID) e poi si ricrea la riga corretta.
-- **Shell di login dinamica.** In provisioning si imposta `bash` se presente
-  nell'immagine, altrimenti `/bin/sh`. `cmd_shell`/`cmd_root` leggono il campo 7 di
-  `/etc/passwd` con fallback `/bin/sh`: **mai `bash` hardcoded** (romperebbe Alpine).
-- **`CONTAINER_CMD` non quotato nel `docker run`** (`... "$BASE_IMAGE" $CONTAINER_CMD`):
-  lo split in parole è voluto (`sleep infinity` → due argomenti). Nel `.env` invece
-  è quotato con apici singoli tramite `shell_quote`.
-- **`random_name` in subshell con `set +o pipefail`**: senza, il `SIGPIPE` su `tr`
-  quando `head` chiude la pipe farebbe fallire la funzione.
-- **Guard root host:** `cmd_create` esce con errore se l'host è UID 0, perché UID 0
-  entrerebbe in conflitto con `root` del container nel provisioning.
+- **User/group inside the container = the ones chosen in `.env`**
+  (`USERNAME`/`GROUPNAME`), **not** the image's default user. UID/GID always
+  come from the host (`id -u`/`id -g`), so ownership on bind-mounts is correct
+  without `chown`.
+- **Provisioning via direct edits to `/etc/passwd` and `/etc/group`** (in
+  `cmd_create`, inside a `docker exec ... sh -c '...'`). Chosen instead of
+  `useradd`/`adduser` to have **a single portable code path** across any
+  distro, Alpine included (busybox has no `useradd` without `shadow`). The
+  `sed` calls remove conflicting lines (by name or by UID/GID) and then the
+  correct line is recreated.
+- **Dynamic login shell.** During provisioning, `bash` is set if present in
+  the image, otherwise `/bin/sh`. `cmd_shell`/`cmd_root` read field 7 of
+  `/etc/passwd` with fallback `/bin/sh`: **never hardcode `bash`** (it would
+  break Alpine).
+- **`CONTAINER_CMD` left unquoted in `docker run`** (`... "$BASE_IMAGE"
+  $CONTAINER_CMD`): the word-splitting is intentional (`sleep infinity` -> two
+  arguments). In `.env`, instead, it is quoted with single quotes via
+  `shell_quote`.
+- **`random_name` in a subshell with `set +o pipefail`**: without it, the
+  `SIGPIPE` sent to `tr` when `head` closes the pipe would make the function
+  fail.
+- **Host-root guard:** `cmd_create` exits with an error if the host is UID 0,
+  because UID 0 would conflict with the container's `root` user during
+  provisioning.
 
-## Convenzioni quando modifichi
+## Conventions when modifying
 
-- I valori host passati al container vanno dati con `--env`, mai interpolati nel
-  testo del comando, per evitare problemi di quoting/escaping.
-- Messaggi utente in italiano. Errori con `die` (stderr, exit 1); avvisi non fatali
-  con `warn`.
-- I valori testuali scritti nel `.env` passano da `shell_quote`.
+- Host values passed to the container go through `--env`, never interpolated
+  into the command text, to avoid quoting/escaping issues.
+- User-facing messages are in English. Errors via `die` (stderr, exit 1);
+  non-fatal warnings via `warn`.
+- Text values written to `.env` go through `shell_quote`.
 
-## Test (senza Docker)
+## Testing (without Docker)
 
-Questo ambiente di sviluppo **non ha Docker**, quindi i percorsi che lo usano
-(`create`/`destroy`/`shell`/`root`) non sono eseguibili qui. Cosa si può comunque
-verificare:
+This development environment **has no Docker**, so the code paths that use it
+(`create`/`destroy`/`shell`/`root`) cannot be exercised here. What can still be
+verified:
 
-- `bash -n ab` per la sintassi.
-- `ab init` in una directory vuota temporanea (pipe degli input con `printf`),
-  poi controllare `.env`/`.env.example` e il round-trip via sourcing.
-- I percorsi d'errore (dir non vuota, comando fuori progetto, ecc.).
-- La **logica di provisioning** simulando il corpo dello `sh -c` con `sh` su finti
-  file `passwd`/`group` locali (scenari: overlap UID/GID, nessun overlap, solo
-  root/Alpine, collisione di nome).
+- `bash -n ab` for syntax.
+- `ab init` in a temporary empty directory (piping inputs with `printf`),
+  then check `.env`/`.env.example` and the round-trip via sourcing.
+- Error paths (non-empty dir, command run outside a project, etc.).
+- The **provisioning logic** by simulating the body of the `sh -c` with `sh`
+  against fake local `passwd`/`group` files (scenarios: UID/GID overlap, no
+  overlap, root/Alpine only, name collision).
 
-Collaudo end-to-end reale: solo su una macchina con Docker (vedi sezione "Verifica"
-del piano e gli esempi nel `README.md`).
+Real end-to-end testing: only on a machine with Docker (see the "Verification"
+section of the plan and the examples in `README.md`).
 
-## Fuori scope (non implementare)
+## Out of scope (do not implement)
 
-Networking/porte, env extra, volumi aggiuntivi oltre a `home/` e `bin/`, limiti di
-risorse, multi-container, build di immagini, sottocomando `stop`.
+Networking/ports, extra env vars, additional volumes beyond `home/` and
+`bin/`, resource limits, multi-container, image builds, a `stop` subcommand.

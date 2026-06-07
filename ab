@@ -1,75 +1,75 @@
 #!/usr/bin/env bash
 #
-# ab - CLI per container Docker usa-e-getta (shell, test, prototipazione).
+# ab - CLI for disposable Docker containers (shell, testing, prototyping).
 #
-# Wrapper sottile attorno a `docker`. Filosofia: KISS, un solo file, nessuna
-# dipendenza oltre a `docker` e agli strumenti standard di qualsiasi Linux.
+# Thin wrapper around `docker`. Philosophy: KISS, single file, no dependencies
+# beyond `docker` and the standard tools available on any Linux system.
 #
-# CONVENZIONE PER I MANUTENTORI:
-#   In tutte le chiamate a comandi esterni si usa SEMPRE la forma lunga delle
-#   opzioni dove disponibile (--detach invece di -d, --volume invece di -v,
-#   --interactive --tty invece di -it, ecc.). Questo rende il codice
-#   autoesplicativo anche per chi non conosce a memoria tutti i flag.
+# MAINTAINER CONVENTION:
+#   All calls to external commands ALWAYS use the long form of options where
+#   available (--detach instead of -d, --volume instead of -v, --interactive
+#   --tty instead of -it, etc). This keeps the code self-explanatory even for
+#   those who don't know every flag by heart.
 #
-# Modello operativo (git-like):
-#   - si crea una directory vuota e la si inizializza con `ab init`;
-#   - i comandi successivi si eseguono dall'interno di quella directory;
-#   - una directory inizializzata si riconosce dal file .env con AB_PROJECT=true.
+# Operating model (git-like):
+#   - create an empty directory and initialize it with `ab init`;
+#   - subsequent commands are run from inside that directory;
+#   - an initialized directory is recognized by the .env file with AB_PROJECT=true.
 #
 set -euo pipefail
 
-# --- default configurabili ------------------------------------------------
+# --- configurable defaults -------------------------------------------------
 DEFAULT_IMAGE="ubuntu:22.04"
 DEFAULT_USER="myuser"
 DEFAULT_GROUP="mygroup"
 DEFAULT_CMD="sleep infinity"
 
 # ==========================================================================
-# Helper
+# Helpers
 # ==========================================================================
 
-# Stampa un messaggio di errore su stderr ed esce con stato 1.
+# Print an error message to stderr and exit with status 1.
 die() {
-    printf 'Errore: %s\n' "$*" >&2
+    printf 'Error: %s\n' "$*" >&2
     exit 1
 }
 
-# Stampa un avviso (non fatale) su stderr.
+# Print a (non-fatal) warning to stderr.
 warn() {
-    printf 'Attenzione: %s\n' "$*" >&2
+    printf 'Warning: %s\n' "$*" >&2
 }
 
-# Mostra l'uso della CLI.
+# Show CLI usage.
 usage() {
     cat <<'EOF'
-Uso: ab <comando>
+Usage: ab <command>
 
-Comandi:
-  init      Inizializza la directory corrente (solo interattivo)
-  create    Crea e avvia il container
-  destroy   Distrugge il container (NON tocca i dati su host)
-  shell     Apre una shell interattiva come utente non privilegiato
-  root      Apre una shell interattiva come root
+Commands:
+  init      Initialize the current directory (interactive only)
+  create    Create and start the container
+  destroy   Destroy the container (does NOT touch host data)
+  shell     Open an interactive shell as an unprivileged user
+  root      Open an interactive shell as root
 EOF
 }
 
-# Verifica che docker sia installato e che il daemon sia raggiungibile.
+# Check that docker is installed and the daemon is reachable.
 preflight_docker() {
     command -v docker >/dev/null 2>&1 \
-        || die "il comando 'docker' non è installato o non è nel PATH."
+        || die "the 'docker' command is not installed or not in PATH."
     docker info >/dev/null 2>&1 \
-        || die "il daemon Docker non è raggiungibile (è avviato? hai i permessi?)."
+        || die "the Docker daemon is not reachable (is it running? do you have permissions?)."
 }
 
-# Verifica di trovarsi in una directory inizializzata da `ab init`.
+# Check that we're in a directory initialized by `ab init`.
 require_project() {
     [ -f .env ] \
-        || die "questa directory non è inizializzata: manca il file .env. Esegui 'ab init'."
+        || die "this directory is not initialized: .env file is missing. Run 'ab init'."
     grep -q '^AB_PROJECT=true$' .env \
-        || die "il file .env non contiene 'AB_PROJECT=true': directory non inizializzata."
+        || die "the .env file does not contain 'AB_PROJECT=true': directory not initialized."
 }
 
-# Carica le variabili del .env esportandole nell'ambiente.
+# Load the .env variables, exporting them into the environment.
 load_env() {
     set -a
     # shellcheck disable=SC1091
@@ -77,38 +77,38 @@ load_env() {
     set +a
 }
 
-# Racchiude un valore tra apici singoli (con escape degli apici interni) in
-# forma sicura da riscrivere nel .env e risorgere via `.`/source. Es.:
+# Wraps a value in single quotes (escaping any internal single quotes) in a
+# form that's safe to write into .env and re-source via `.`/source. E.g.:
 #   sleep infinity            -> 'sleep infinity'
-#   bash -c "echo ciao"       -> 'bash -c "echo ciao"'
+#   bash -c "echo hello"      -> 'bash -c "echo hello"'
 shell_quote() {
     local s=$1
     s=${s//\'/\'\\\'\'}
     printf "'%s'" "$s"
 }
 
-# Genera 8 caratteri alfanumerici lowercase casuali da /dev/urandom.
-# Il subshell con `set +o pipefail` evita che il SIGPIPE inviato a `tr`
-# quando `head` chiude la pipe faccia fallire la funzione.
+# Generate 8 random lowercase alphanumeric characters from /dev/urandom.
+# The subshell with `set +o pipefail` prevents the SIGPIPE sent to `tr`
+# when `head` closes the pipe from making the function fail.
 random_name() {
     ( set +o pipefail
       LC_ALL=C tr -dc 'a-z0-9' < /dev/urandom | head -c 8 )
 }
 
-# Mostra una domanda con valore di default tra [] e restituisce la risposta
-# (Invio accetta il default). Uso: valore=$(ask "Testo" "default")
+# Show a question with a default value in [] and return the answer
+# (Enter accepts the default). Usage: value=$(ask "Text" "default")
 ask() {
-    local risposta
-    read -r -p "$1 [$2]: " risposta
-    printf '%s' "${risposta:-$2}"
+    local answer
+    read -r -p "$1 [$2]: " answer
+    printf '%s' "${answer:-$2}"
 }
 
-# Domanda sì/No con default No. Ritorna 0 se l'utente risponde sì.
-# Uso: if ask_yes_no "Abilita X?"; then ...
+# Yes/No question with default No. Returns 0 if the user answers yes.
+# Usage: if ask_yes_no "Enable X?"; then ...
 ask_yes_no() {
-    local risposta
-    read -r -p "$1 [y/N]: " risposta
-    case "$risposta" in
+    local answer
+    read -r -p "$1 [y/N]: " answer
+    case "$answer" in
         [yY] | [yY][eE][sS]) return 0 ;;
         *)                   return 1 ;;
     esac
@@ -118,127 +118,127 @@ ask_yes_no() {
 # ab init
 # ==========================================================================
 cmd_init() {
-    [ "$#" -eq 0 ] || die "'ab init' non accetta argomenti né flag."
+    [ "$#" -eq 0 ] || die "'ab init' does not accept arguments or flags."
 
-    # La directory deve essere completamente vuota (dotfile inclusi).
+    # The directory must be completely empty (dotfiles included).
     if [ -n "$(ls -A .)" ]; then
-        die "la directory corrente non è vuota. 'ab init' richiede una directory completamente vuota."
+        die "the current directory is not empty. 'ab init' requires a completely empty directory."
     fi
 
-    echo "Inizializzazione del progetto ab nella directory corrente."
-    echo "Premi Invio per accettare il valore di default tra parentesi."
+    echo "Initializing the ab project in the current directory."
+    echo "Press Enter to accept the default value shown in brackets."
     echo
 
     local container_name base_image username groupname container_cmd enable_x11 enable_wayland
-    container_name=$(ask "Nome container"  "$(random_name)")
-    base_image=$(ask    "Immagine base"    "$DEFAULT_IMAGE")
-    username=$(ask      "Username"         "$DEFAULT_USER")
-    groupname=$(ask     "Groupname"        "$DEFAULT_GROUP")
-    container_cmd=$(ask "Comando di avvio" "$DEFAULT_CMD")
+    container_name=$(ask "Container name" "$(random_name)")
+    base_image=$(ask    "Base image"      "$DEFAULT_IMAGE")
+    username=$(ask      "Username"        "$DEFAULT_USER")
+    groupname=$(ask     "Groupname"       "$DEFAULT_GROUP")
+    container_cmd=$(ask "Startup command" "$DEFAULT_CMD")
 
-    if ask_yes_no "Abilitare il supporto X11?";     then enable_x11=true;     else enable_x11=false;     fi
-    if ask_yes_no "Abilitare il supporto Wayland?"; then enable_wayland=true; else enable_wayland=false; fi
+    if ask_yes_no "Enable X11 support?";     then enable_x11=true;     else enable_x11=false;     fi
+    if ask_yes_no "Enable Wayland support?"; then enable_wayland=true; else enable_wayland=false; fi
 
-    # Sottodirectory persistenti su host.
+    # Persistent subdirectories on the host.
     mkdir --parents home bin
 
-    # File .env effettivamente letto a runtime, con un commento per ogni chiave.
+    # .env file actually read at runtime, with a comment for each key.
     cat > .env <<EOF
-# File di configurazione del progetto ab. Modificabile a mano.
-# Riferimento completo delle opzioni: vedi .env.example
+# Configuration file for the ab project. Editable by hand.
+# Full reference of the options: see .env.example
 
-# Marcatore di progetto inizializzato. NON rimuovere.
+# Marker for an initialized project. DO NOT remove.
 AB_PROJECT=true
 
-# Nome del container Docker.
+# Name of the Docker container.
 CONTAINER_NAME=$(shell_quote "$container_name")
 
-# Immagine base usata per il container.
+# Base image used for the container.
 BASE_IMAGE=$(shell_quote "$base_image")
 
-# Nome dell'utente non privilegiato creato nel container.
+# Name of the unprivileged user created in the container.
 USERNAME=$(shell_quote "$username")
 
-# Nome del gruppo primario dell'utente nel container.
+# Name of the user's primary group in the container.
 GROUPNAME=$(shell_quote "$groupname")
 
-# Comando principale eseguito all'avvio del container.
+# Main command run at container startup.
 CONTAINER_CMD=$(shell_quote "$container_cmd")
 
-# Supporto grafico X11 (true|false).
+# X11 graphical support (true|false).
 ENABLE_X11=$enable_x11
 
-# Supporto grafico Wayland (true|false).
+# Wayland graphical support (true|false).
 ENABLE_WAYLAND=$enable_wayland
 EOF
 
-    # File di riferimento documentale completo. Mai letto da ab a runtime.
+    # Full documentation reference file. Never read by ab at runtime.
     cat > .env.example <<'EOF'
-# .env.example - riferimento completo delle opzioni del progetto ab.
-# Questo file è solo documentazione: ab legge esclusivamente il file .env.
-# Copia/incolla le chiavi che vuoi modificare nel tuo .env.
+# .env.example - full reference of the ab project options.
+# This file is documentation only: ab reads exclusively the .env file.
+# Copy/paste the keys you want to change into your .env.
 
 # AB_PROJECT
-#   Marcatore di directory inizializzata. Deve valere esattamente "true",
-#   altrimenti ab rifiuta qualsiasi comando diverso da 'init'.
-#   Valore: true
+#   Marker for an initialized directory. Must be exactly "true",
+#   otherwise ab refuses any command other than 'init'.
+#   Value: true
 AB_PROJECT=true
 
 # CONTAINER_NAME
-#   Nome del container Docker creato da 'ab create'.
-#   Default: 8 caratteri alfanumerici casuali generati da 'ab init'.
-CONTAINER_NAME=esempio12
+#   Name of the Docker container created by 'ab create'.
+#   Default: 8 random alphanumeric characters generated by 'ab init'.
+CONTAINER_NAME=example12
 
 # BASE_IMAGE
-#   Immagine Docker di base. Qualsiasi tag valido per 'docker run'.
+#   Base Docker image. Any tag valid for 'docker run'.
 #   Default: ubuntu:22.04
 BASE_IMAGE=ubuntu:22.04
 
 # USERNAME
-#   Nome dell'utente non privilegiato creato nel container. Se l'immagine ha
-#   già un utente/gruppo con lo stesso nome o lo stesso UID/GID dell'host, viene
-#   rimosso e ricreato con i valori corretti.
+#   Name of the unprivileged user created in the container. If the image
+#   already has a user/group with the same name or the same UID/GID as the
+#   host, it is removed and recreated with the correct values.
 #   Default: myuser
 USERNAME=myuser
 
 # GROUPNAME
-#   Nome del gruppo primario dell'utente nel container.
+#   Name of the user's primary group in the container.
 #   Default: mygroup
 GROUPNAME=mygroup
 
 # CONTAINER_CMD
-#   Comando principale del container (PID 1). Racchiudilo tra apici singoli se
-#   contiene spazi o caratteri speciali (es. virgolette).
+#   Main command of the container (PID 1). Wrap it in single quotes if it
+#   contains spaces or special characters (e.g. quotes).
 #   Default: 'sleep infinity'
 CONTAINER_CMD='sleep infinity'
 
 # ENABLE_X11
-#   Abilita il forwarding grafico X11 verso l'host.
-#   Valori ammessi: true | false   (Default: false)
+#   Enable X11 graphical forwarding to the host.
+#   Allowed values: true | false   (Default: false)
 ENABLE_X11=false
 
 # ENABLE_WAYLAND
-#   Abilita il forwarding grafico Wayland verso l'host.
-#   Valori ammessi: true | false   (Default: false)
+#   Enable Wayland graphical forwarding to the host.
+#   Allowed values: true | false   (Default: false)
 ENABLE_WAYLAND=false
 EOF
 
     echo
-    echo "Progetto inizializzato:"
+    echo "Project initialized:"
     echo "  - container: $container_name"
-    echo "  - immagine:  $base_image"
+    echo "  - image:     $base_image"
     echo "  - directory: home/ bin/ .env .env.example"
     echo
-    echo "Prossimo passo: 'ab create'."
+    echo "Next step: 'ab create'."
 }
 
 # ==========================================================================
 # ab create
 # ==========================================================================
 cmd_create() {
-    # Nessun container con questo nome deve già esistere (in qualsiasi stato).
+    # No container with this name must already exist (in any state).
     if docker ps --all --format '{{.Names}}' | grep -qx "$CONTAINER_NAME"; then
-        die "esiste già un container chiamato '$CONTAINER_NAME'. Usa 'ab destroy' prima di ricrearlo."
+        die "a container named '$CONTAINER_NAME' already exists. Run 'ab destroy' before recreating it."
     fi
 
     local host_uid host_gid
@@ -246,14 +246,14 @@ cmd_create() {
     host_gid=$(id -g)
 
     if [ "$host_uid" -eq 0 ]; then
-        die "ab non va eseguito come root sull'host: UID 0 entrerebbe in conflitto con l'utente root del container. Esegui ab come utente non privilegiato."
+        die "ab must not be run as root on the host: UID 0 would conflict with the container's root user. Run ab as an unprivileged user."
     fi
 
-    # La home dell'utente è sempre /home/$USERNAME (l'utente è quello scelto,
-    # non quello di default dell'immagine): nessuna ispezione preliminare serve.
+    # The user's home is always /home/$USERNAME (the user is the one chosen
+    # in .env, not the image's default): no preliminary inspection is needed.
     local effective_home="/home/$USERNAME"
 
-    # Costruzione degli argomenti di 'docker run' (forma lunga).
+    # Build the 'docker run' arguments (long form).
     local run_args=(
         --detach
         --name "$CONTAINER_NAME"
@@ -261,11 +261,11 @@ cmd_create() {
         --volume "$PWD/bin:/usr/local/bin"
     )
 
-    # Flag grafici opzionali.
+    # Optional graphical flags.
     if [ "${ENABLE_X11:-false}" = "true" ]; then
-        [ -n "${DISPLAY:-}" ] || warn "ENABLE_X11=true ma \$DISPLAY non è impostata."
+        [ -n "${DISPLAY:-}" ] || warn "ENABLE_X11=true but \$DISPLAY is not set."
         local xauth="${XAUTHORITY:-$HOME/.Xauthority}"
-        [ -e "$xauth" ] || warn "file Xauthority '$xauth' inesistente: il mount potrebbe fallire."
+        [ -e "$xauth" ] || warn "Xauthority file '$xauth' does not exist: the mount might fail."
         run_args+=(
             --volume /tmp/.X11-unix:/tmp/.X11-unix
             --env "DISPLAY=${DISPLAY:-}"
@@ -274,7 +274,7 @@ cmd_create() {
         )
     fi
     if [ "${ENABLE_WAYLAND:-false}" = "true" ]; then
-        [ -n "${XDG_RUNTIME_DIR:-}" ] || warn "ENABLE_WAYLAND=true ma \$XDG_RUNTIME_DIR non è impostata."
+        [ -n "${XDG_RUNTIME_DIR:-}" ] || warn "ENABLE_WAYLAND=true but \$XDG_RUNTIME_DIR is not set."
         run_args+=(
             --volume "$XDG_RUNTIME_DIR/wayland-0:/run/user/$host_uid/wayland-0"
             --env "WAYLAND_DISPLAY=wayland-0"
@@ -282,20 +282,20 @@ cmd_create() {
         )
     fi
 
-    # Avvio del container. $CONTAINER_CMD volutamente NON quotato per lo split
-    # in argomenti (es. "sleep infinity" -> due argomenti).
-    echo "Avvio del container '$CONTAINER_NAME'..."
+    # Start the container. $CONTAINER_CMD intentionally NOT quoted so it
+    # splits into arguments (e.g. "sleep infinity" -> two arguments).
+    echo "Starting container '$CONTAINER_NAME'..."
     docker run "${run_args[@]}" "$BASE_IMAGE" $CONTAINER_CMD >/dev/null
 
-    # Provisioning utente/gruppo lavorando direttamente su /etc/passwd e
-    # /etc/group: un solo code path portabile su qualsiasi distro (Alpine
-    # inclusa), nessuna dipendenza da useradd/adduser/shadow. I valori host
-    # sono passati via --env per evitare problemi di quoting.
+    # User/group provisioning by editing /etc/passwd and /etc/group directly:
+    # a single portable code path on any distro (Alpine included), with no
+    # dependency on useradd/adduser/shadow. Host values are passed via --env
+    # to avoid quoting issues.
     #
-    # Strategia: si usa SEMPRE l'utente/gruppo scelto in .env. Se un'utenza o un
-    # gruppo preesistenti overlappano sul nome scelto o sull'UID/GID dell'host,
-    # la riga in conflitto viene rimossa e ricreata con i valori corretti.
-    echo "Provisioning utente '$USERNAME' (UID $host_uid) e gruppo '$GROUPNAME' (GID $host_gid)..."
+    # Strategy: ALWAYS use the user/group chosen in .env. If a pre-existing
+    # user or group overlaps the chosen name or the host UID/GID, the
+    # conflicting line is removed and recreated with the correct values.
+    echo "Provisioning user '$USERNAME' (UID $host_uid) and group '$GROUPNAME' (GID $host_gid)..."
     docker exec --user root \
         --env USERNAME="$USERNAME" \
         --env GROUPNAME="$GROUPNAME" \
@@ -304,21 +304,21 @@ cmd_create() {
         "$CONTAINER_NAME" sh -c '
             set -e
 
-            # Gruppo: rimuovi righe in conflitto (stesso nome o stesso GID),
-            # poi crea il gruppo scelto.
+            # Group: remove conflicting lines (same name or same GID),
+            # then create the chosen group.
             sed -i "/^${GROUPNAME}:/d" /etc/group
             sed -i "/^[^:]*:[^:]*:${HOST_GID}:/d" /etc/group
             echo "${GROUPNAME}:x:${HOST_GID}:" >> /etc/group
 
-            # Shell di login: bash se presente nell immagine, altrimenti /bin/sh.
+            # Login shell: bash if present in the image, otherwise /bin/sh.
             if command -v bash >/dev/null 2>&1; then
                 LOGIN_SHELL=$(command -v bash)
             else
                 LOGIN_SHELL=/bin/sh
             fi
 
-            # Utente: rimuovi righe in conflitto (stesso nome o stesso UID),
-            # poi crea l utente scelto con home e shell.
+            # User: remove conflicting lines (same name or same UID),
+            # then create the chosen user with home and shell.
             sed -i "/^${USERNAME}:/d" /etc/passwd
             sed -i "/^[^:]*:[^:]*:${HOST_UID}:/d" /etc/passwd
             echo "${USERNAME}:x:${HOST_UID}:${HOST_GID}::/home/${USERNAME}:${LOGIN_SHELL}" >> /etc/passwd
@@ -326,7 +326,7 @@ cmd_create() {
             mkdir -p "/home/${USERNAME}"
         '
 
-    echo "Container '$CONTAINER_NAME' pronto. Usa 'ab shell' o 'ab root'."
+    echo "Container '$CONTAINER_NAME' ready. Use 'ab shell' or 'ab root'."
 }
 
 # ==========================================================================
@@ -334,31 +334,31 @@ cmd_create() {
 # ==========================================================================
 cmd_destroy() {
     if ! docker ps --all --format '{{.Names}}' | grep -qx "$CONTAINER_NAME"; then
-        die "il container '$CONTAINER_NAME' non esiste."
+        die "container '$CONTAINER_NAME' does not exist."
     fi
-    # Non tocca mai home/, bin/, .env, .env.example né la directory host.
+    # Never touches home/, bin/, .env, .env.example or the host directory.
     docker rm --force "$CONTAINER_NAME" >/dev/null
-    echo "Container '$CONTAINER_NAME' distrutto. I dati su host (home/, bin/) sono intatti."
+    echo "Container '$CONTAINER_NAME' destroyed. Host data (home/, bin/) is intact."
 }
 
 # ==========================================================================
 # ab shell / ab root
 # ==========================================================================
 
-# Restituisce lo stato del container: "running", "exited"/"created"/..., o
-# stringa vuota se non esiste.
+# Returns the container's state: "running", "exited"/"created"/..., or an
+# empty string if it doesn't exist.
 container_state() {
     docker inspect --format '{{.State.Status}}' "$CONTAINER_NAME" 2>/dev/null || true
 }
 
-# Avvia il container se è fermo; esce con errore se non esiste.
+# Starts the container if it's stopped; exits with an error if it doesn't exist.
 ensure_running() {
     local state
     state=$(container_state)
     [ -n "$state" ] \
-        || die "il container '$CONTAINER_NAME' non esiste. Esegui 'ab create'."
+        || die "container '$CONTAINER_NAME' does not exist. Run 'ab create'."
     if [ "$state" != "running" ]; then
-        echo "Il container era fermo: lo riavvio..."
+        echo "The container was stopped: restarting it..."
         docker start "$CONTAINER_NAME" >/dev/null
     fi
 }
@@ -367,8 +367,8 @@ cmd_shell() {
     ensure_running
     local home shell
     home="/home/$USERNAME"
-    # Shell di login (campo 7) dell'utente scelto: niente bash hardcoded, così
-    # funziona anche dove bash non c'è (fallback /bin/sh).
+    # Login shell (field 7) of the chosen user: no hardcoded bash, so this
+    # also works where bash isn't available (fallback /bin/sh).
     shell=$(docker exec "$CONTAINER_NAME" \
         awk -F: -v u="$USERNAME" '$1==u {print $7; exit}' /etc/passwd)
     docker exec --interactive --tty \

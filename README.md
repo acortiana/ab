@@ -1,137 +1,138 @@
 # ab
 
-`ab` è una piccola CLI Bash che semplifica il ciclo di vita di container Docker
-usati come **ambienti confinati e usa-e-getta**: shell interattiva, test,
-prototipazione. È un wrapper sottile attorno a `docker`, con persistenza dei dati
-su host in `home/` e `bin/`.
+`ab` is a small Bash CLI that simplifies the lifecycle of Docker containers
+used as **disposable, sandboxed environments**: interactive shell, testing,
+prototyping. It's a thin wrapper around `docker`, with data persisted on the
+host in `home/` and `bin/`.
 
-- **Eseguibile unico**: un solo script Bash autocontenuto.
-- **Nessuna dipendenza** oltre a `docker` e agli strumenti standard di qualsiasi Linux.
-- **KISS**: codice semplice, leggibile e modificabile anche da chi non programma.
-- **UID/GID coerenti**: l'utente nel container ha lo stesso UID/GID dell'utente host,
-  quindi i file in `home/` e `bin/` hanno ownership corretta senza `chown`.
+- **Single executable**: one self-contained Bash script.
+- **No dependencies** beyond `docker` and the standard tools of any Linux system.
+- **KISS**: simple, readable code, modifiable even by non-programmers.
+- **Consistent UID/GID**: the user inside the container has the same UID/GID as
+  the host user, so files in `home/` and `bin/` have correct ownership without `chown`.
 
-## Requisiti
+## Requirements
 
-- `docker` installato e daemon in esecuzione (con permessi per l'utente corrente).
-- Da eseguire come **utente non privilegiato** (non root).
+- `docker` installed and the daemon running (with permissions for the current user).
+- Run as an **unprivileged user** (not root).
 
-## Installazione
+## Installation
 
-Copia lo script `ab` in una directory nel tuo `PATH` e rendilo eseguibile:
+Copy the `ab` script into a directory in your `PATH` and make it executable:
 
 ```sh
-install -m 755 ab ~/.local/bin/ab    # oppure /usr/local/bin/ab
+install -m 755 ab ~/.local/bin/ab    # or /usr/local/bin/ab
 ```
 
-## Modello operativo (git-like)
+## Operating model (git-like)
 
-1. Crea una directory **vuota** dove vuoi sull'host.
-2. Inizializzala con `ab init` (analogo a `git init`).
-3. Esegui i comandi successivi **dall'interno** di quella directory.
+1. Create an **empty** directory wherever you want on the host.
+2. Initialize it with `ab init` (similar to `git init`).
+3. Run subsequent commands **from inside** that directory.
 
-Una directory inizializzata si riconosce dal file `.env` contenente la riga
-`AB_PROJECT=true`. Fuori da una directory inizializzata, ogni comando diverso da
-`init` esce con errore.
+An initialized directory is recognized by the `.env` file containing the line
+`AB_PROJECT=true`. Outside an initialized directory, every command other than
+`init` exits with an error.
 
-## Comandi
+## Commands
 
-| Comando      | Descrizione                                                       |
-|--------------|------------------------------------------------------------------|
-| `ab init`    | Inizializza la directory corrente (solo interattivo)             |
-| `ab create`  | Crea e avvia il container                                        |
-| `ab destroy` | Distrugge il container (**non** tocca i dati su host)            |
-| `ab shell`   | Apre una shell interattiva come utente non privilegiato         |
-| `ab root`    | Apre una shell interattiva come root                            |
+| Command      | Description                                                       |
+|--------------|-------------------------------------------------------------------|
+| `ab init`    | Initialize the current directory (interactive only)              |
+| `ab create`  | Create and start the container                                   |
+| `ab destroy` | Destroy the container (does **not** touch host data)             |
+| `ab shell`   | Open an interactive shell as an unprivileged user                |
+| `ab root`    | Open an interactive shell as root                                 |
 
-`shell` e `root` riavviano automaticamente il container se è fermo.
+`shell` and `root` automatically restart the container if it's stopped.
 
-## Esempio
+## Example
 
 ```sh
-mkdir prova && cd prova
-ab init        # rispondi alle domande (Invio = default)
-ab create      # crea e avvia il container
-ab shell       # entra come utente non privilegiato
-# ... lavora ...
-ab destroy     # rimuove il container; home/ e bin/ restano intatti
+mkdir trial && cd trial
+ab init        # answer the questions (Enter = default)
+ab create      # create and start the container
+ab shell       # enter as an unprivileged user
+# ... work ...
+ab destroy     # remove the container; home/ and bin/ remain intact
 ```
 
 ## `ab init`
 
-Va eseguito in una directory **completamente vuota** (dot-file inclusi).
-È interattivo: per ogni parametro mostra il default tra `[]`; premi Invio per
-accettarlo o digita un valore alternativo.
+Must be run in a **completely empty** directory (dotfiles included).
+It's interactive: for each parameter it shows the default in `[]`; press Enter
+to accept it or type an alternative value.
 
-| Parametro      | Default                              |
-|----------------|--------------------------------------|
-| Nome container | 8 caratteri alfanumerici casuali     |
-| Immagine base  | `ubuntu:22.04`                       |
-| Username       | `myuser`                             |
-| Groupname      | `mygroup`                            |
-| Comando avvio  | `sleep infinity`                     |
-| Abilita X11    | `false`                              |
-| Abilita Wayland| `false`                              |
+| Parameter       | Default                              |
+|-----------------|--------------------------------------|
+| Container name  | 8 random alphanumeric characters     |
+| Base image      | `ubuntu:22.04`                       |
+| Username        | `myuser`                             |
+| Groupname       | `mygroup`                            |
+| Startup command | `sleep infinity`                     |
+| Enable X11      | `false`                              |
+| Enable Wayland  | `false`                              |
 
-UID e GID **non** si configurano: vengono letti a runtime dall'utente che esegue
-`ab` (`id -u` / `id -g`).
+UID and GID are **not** configurable: they are read at runtime from the user
+running `ab` (`id -u` / `id -g`).
 
-`init` crea le sottodirectory `home/` e `bin/`, il file `.env` (letto a runtime)
-e il file `.env.example` (riferimento documentale completo, mai letto da `ab`).
+`init` creates the `home/` and `bin/` subdirectories, the `.env` file (read at
+runtime) and the `.env.example` file (full documentation reference, never read
+by `ab`).
 
-## Configurazione (`.env`)
+## Configuration (`.env`)
 
 ```sh
-AB_PROJECT=true            # marcatore di progetto, NON rimuovere
-CONTAINER_NAME='...'       # nome del container
-BASE_IMAGE='ubuntu:22.04'  # immagine base
-USERNAME='myuser'          # utente non privilegiato nel container
-GROUPNAME='mygroup'        # gruppo primario
-CONTAINER_CMD='sleep infinity'  # comando principale (PID 1)
-ENABLE_X11=false           # supporto grafico X11
-ENABLE_WAYLAND=false       # supporto grafico Wayland
+AB_PROJECT=true            # project marker, DO NOT remove
+CONTAINER_NAME='...'       # container name
+BASE_IMAGE='ubuntu:22.04'  # base image
+USERNAME='myuser'          # unprivileged user inside the container
+GROUPNAME='mygroup'        # primary group
+CONTAINER_CMD='sleep infinity'  # main command (PID 1)
+ENABLE_X11=false           # X11 graphical support
+ENABLE_WAYLAND=false       # Wayland graphical support
 ```
 
-I valori testuali sono racchiusi tra apici singoli: quotali se contengono spazi o
-caratteri speciali. Vedi `.env.example` per la documentazione completa di ogni chiave.
+Text values are wrapped in single quotes: quote them if they contain spaces or
+special characters. See `.env.example` for the full documentation of every key.
 
-## Gestione di utente, gruppo e UID/GID
+## User, group and UID/GID management
 
-`ab create` usa **sempre** l'utente e il gruppo indicati nel `.env`, non quelli di
-default dell'immagine. Il provisioning lavora direttamente su `/etc/passwd` e
-`/etc/group` nel container (un solo metodo portabile su ogni distro — Ubuntu,
-Debian, Fedora, Alpine — senza dipendere da `useradd`/`adduser`/`shadow`):
+`ab create` **always** uses the user and group given in `.env`, not the
+image's defaults. Provisioning works directly on `/etc/passwd` and
+`/etc/group` inside the container (a single method portable across any distro
+— Ubuntu, Debian, Fedora, Alpine — without depending on `useradd`/`adduser`/`shadow`):
 
-- crea il gruppo `GROUPNAME` con il **GID dell'host**;
-- crea l'utente `USERNAME` con l'**UID dell'host**, gruppo primario `GROUPNAME`,
-  home `/home/$USERNAME`;
-- se un utente o un gruppo preesistenti **overlappano** (stesso nome, oppure stesso
-  UID/GID dell'host), la riga in conflitto viene **rimossa e ricreata** corretta.
+- creates the `GROUPNAME` group with the **host's GID**;
+- creates the `USERNAME` user with the **host's UID**, primary group
+  `GROUPNAME`, home `/home/$USERNAME`;
+- if a pre-existing user or group **overlaps** (same name, or same host
+  UID/GID), the conflicting line is **removed and recreated** correctly.
 
-La shell di login dell'utente è `bash` se presente nell'immagine, altrimenti
-`/bin/sh`: per questo `ab shell`/`ab root` funzionano anche su immagini senza
-`bash` (es. Alpine "base").
+The user's login shell is `bash` if present in the image, otherwise `/bin/sh`:
+this is why `ab shell`/`ab root` also work on images without `bash`
+(e.g. Alpine "base").
 
-## Supporto grafico
+## Graphical support
 
-Configurabile nel `.env`, applicato da `ab create`. X11 e Wayland sono indipendenti
-e attivabili insieme.
+Configurable in `.env`, applied by `ab create`. X11 and Wayland are independent
+and can be enabled together.
 
-- **X11** (`ENABLE_X11=true`): monta `/tmp/.X11-unix` e l'`Xauthority` (in sola
-  lettura), e passa `DISPLAY`/`XAUTHORITY`.
-- **Wayland** (`ENABLE_WAYLAND=true`): monta il solo socket `wayland-0` e passa
-  `WAYLAND_DISPLAY`/`XDG_RUNTIME_DIR`. Funziona perché il container usa lo stesso
-  UID dell'host.
+- **X11** (`ENABLE_X11=true`): mounts `/tmp/.X11-unix` and the `Xauthority`
+  file (read-only), and passes `DISPLAY`/`XAUTHORITY`.
+- **Wayland** (`ENABLE_WAYLAND=true`): mounts only the `wayland-0` socket and
+  passes `WAYLAND_DISPLAY`/`XDG_RUNTIME_DIR`. This works because the container
+  uses the same UID as the host.
 
-## Persistenza dei dati
+## Data persistence
 
-- `./home` è montata su `/home/$USERNAME` nel container.
-- `./bin` è montata su `/usr/local/bin` (utile per metterci script/eseguibili).
-- `ab destroy` rimuove **solo** il container: `home/`, `bin/`, `.env` e
-  `.env.example` non vengono mai toccati.
+- `./home` is mounted at `/home/$USERNAME` inside the container.
+- `./bin` is mounted at `/usr/local/bin` (handy for placing scripts/executables).
+- `ab destroy` removes **only** the container: `home/`, `bin/`, `.env` and
+  `.env.example` are never touched.
 
-## Fuori scope
+## Out of scope
 
-Networking/porte, variabili d'ambiente extra, volumi aggiuntivi, limiti di risorse,
-multi-container, build di immagini custom, sottocomando `stop` (il container resta
-attivo finché non viene distrutto; `shell`/`root` lo riavviano se fermo).
+Networking/ports, extra environment variables, additional volumes, resource
+limits, multi-container setups, custom image builds, a `stop` subcommand (the
+container stays up until destroyed; `shell`/`root` restart it if stopped).
