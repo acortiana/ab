@@ -114,6 +114,45 @@ ask_yes_no() {
     esac
 }
 
+# Run the active scripts found in host directory $1, in alphabetical order,
+# inside $CONTAINER_NAME with working directory $2, via "docker exec
+# --interactive --tty" using the extra arguments $4 $5 ... (e.g. "--user
+# root" or "--user $USERNAME --env HOME=$home"). $3 is a short label used in
+# messages (e.g. "provisioning script", "startup script"). Runs in the
+# foreground, attached to the same terminal: scripts needing user
+# interaction behave as if the commands were typed directly.
+#
+# Active scripts follow the run-parts naming convention: filenames made up
+# only of [A-Za-z0-9_-] (no dots) -- any other name (README.md, *.disabled,
+# *.bak, ...) is skipped, which doubles as the "disable via rename"
+# mechanism. If the host directory doesn't exist, the glob below stays
+# unexpanded, "-f" is false, and the loop is a silent no-op.
+#
+# Stops and warns at the first script that is not executable or exits with
+# an error, then returns non-zero: the caller decides whether that's fatal
+# (provision.d/ -> die) or not (startup.d/ -> report and carry on).
+run_scripts_dir() {
+    local host_dir=$1 container_workdir=$2 label=$3
+    shift 3
+    local rel=${host_dir#"$PWD/"}
+    local script name
+    for script in "$host_dir"/*; do
+        [ -f "$script" ] || continue
+        name=$(basename "$script")
+        case "$name" in
+            *[!A-Za-z0-9_-]*) continue ;;
+        esac
+        if [ ! -x "$script" ]; then
+            warn "$label '$rel/$name' is not executable. Run 'chmod +x $rel/$name', or rename it (e.g. add '.disabled') to skip it."
+            return 1
+        fi
+        echo "Running $label '$name'..."
+        docker exec --interactive --tty "$@" --workdir "$container_workdir" \
+            "$CONTAINER_NAME" "$container_workdir/$name" \
+            || { warn "$label '$name' exited with an error."; return 1; }
+    done
+}
+
 # ==========================================================================
 # ab init
 # ==========================================================================
@@ -140,7 +179,7 @@ cmd_init() {
     if ask_yes_no "Enable Wayland support?"; then enable_wayland=true; else enable_wayland=false; fi
 
     # Persistent subdirectories on the host.
-    mkdir --parents home bin provision.d
+    mkdir --parents home bin provision.d home/startup.d
 
     # .env file actually read at runtime, with a comment for each key.
     cat > .env <<EOF
@@ -292,11 +331,95 @@ exit 0
 EOF
     chmod +x provision.d/00-example.disabled
 
+    # README for home/startup.d/ (documentation only, never read by ab).
+    cat > home/startup.d/README.md <<'EOF'
+# startup.d/
+
+Scripts placed in this directory are executed **as the unprivileged user**
+(`$USERNAME`), **in alphabetical order**, every time `ab` (re)starts the
+container -- both on the very first `ab create` (right after `provision.d/`)
+and on every later restart triggered by `ab shell`/`ab root` finding it
+stopped. They run in the foreground, attached to the same terminal.
+
+Use this directory for things that need to happen on every boot: starting a
+background service, syncing dotfiles, regenerating configuration that
+depends on the host, and so on. For one-shot setup that should run only once
+(installing packages, cloning repositories, ...), use `provision.d/` instead.
+
+This directory is **not mandatory**: if you delete it, `ab` simply skips it.
+
+## Important differences from provision.d/
+
+- **Runs as your unprivileged user, not root.** This directory lives inside
+  your `home/`, which you own: running arbitrary content from here as root
+  would turn any file that lands in it into a potential root-execution
+  vector. If you need root, use `provision.d/`.
+- **Scripts must be idempotent.** Unlike `provision.d/` (which runs once),
+  these scripts can run many times over the life of the same container:
+  write them so that running them again causes no harm.
+- **A failing script never blocks `ab`.** `ab` reports the problem with a
+  warning and carries on (it would be unhelpful to lock you out of your own
+  container just because a startup script misbehaved). Still, end your
+  scripts with `exit 0` on success: it documents your intent and makes
+  failures easy to spot in the warning.
+- **Coverage is limited to restarts mediated by `ab`.** `ab` cannot intercept
+  a container started in some other way (e.g. a direct `docker start`, or a
+  Docker restart policy): scripts here run only when `ab create`/`ab
+  shell`/`ab root` is what (re)starts the container.
+
+## Naming convention
+
+Same run-parts style as `provision.d/`: active scripts have names made up
+**only** of letters, digits, `_` and `-` (e.g. `10-start-service`,
+`20-sync-dotfiles`); to disable one temporarily, rename it adding any suffix
+that contains a dot (e.g. `10-start-service.disabled`). See the README in
+`provision.d/` for the full rationale -- it applies here unchanged.
+
+## Example
+
+See `00-example.disabled` for a minimal working script, shipped already
+disabled so that a freshly initialized project doesn't run anything by
+default. To try it out:
+
+    mv 00-example.disabled 00-example
+    ab create
+EOF
+
+    # Example script: shipped disabled and already executable, so enabling
+    # it is a matter of a simple rename (see provision.d/00-example.disabled
+    # for the rationale of this convention).
+    cat > home/startup.d/00-example.disabled <<'EOF'
+#!/bin/sh
+#
+# Example startup script: runs as your unprivileged user every time `ab`
+# (re)starts the container.
+#
+# To activate it, rename this file removing the ".disabled" suffix (it's
+# already executable). To deactivate it again, rename it back, or add any
+# other suffix containing a dot. See README.md in this directory for the
+# full naming convention -- and remember: unlike provision.d/, this script
+# may run many times, so it must be idempotent.
+
+set -e
+
+echo "Hello from startup.d/00-example!"
+echo "Running as: $(id -un) (uid=$(id -u))"
+
+# Add your startup commands here: start a background service, sync
+# dotfiles, regenerate configuration, etc. Keep it idempotent: running it
+# again (on the next restart) must cause no harm. A failing script only
+# produces a warning -- it never blocks 'ab' -- but ending with "exit 0"
+# documents that everything went as expected.
+
+exit 0
+EOF
+    chmod +x home/startup.d/00-example.disabled
+
     echo
     echo "Project initialized:"
     echo "  - container: $container_name"
     echo "  - image:     $base_image"
-    echo "  - directory: home/ bin/ provision.d/ .env .env.example"
+    echo "  - directory: home/ (with startup.d/) bin/ provision.d/ .env .env.example"
     echo
     echo "Next step: 'ab create'."
 }
@@ -399,31 +522,20 @@ cmd_create() {
             mkdir -p "/home/${USERNAME}"
         '
 
-    # Run provisioning scripts from provision.d/, in alphabetical order, as
-    # root, in the foreground and attached to this terminal (so scripts that
-    # need user interaction behave as if the commands were typed directly).
-    # Active scripts are filenames made up only of [A-Za-z0-9_-] (run-parts
-    # style): any name containing a dot (README.md, *.disabled, *.bak, ...)
-    # is skipped, which doubles as the "disable a script via rename"
-    # mechanism. Every script must end with "exit 0": on the first failure,
-    # 'ab create' stops and leaves the container running for inspection.
-    local mount_point="/usr/local/provision.d"
-    local script name
-    for script in "$PWD"/provision.d/*; do
-        [ -f "$script" ] || continue
-        name=$(basename "$script")
-        case "$name" in
-            *[!A-Za-z0-9_-]*) continue ;;
-        esac
-        [ -x "$script" ] \
-            || die "provisioning script 'provision.d/$name' is not executable. Run 'chmod +x provision.d/$name', or rename it (e.g. add '.disabled') to skip it."
-        echo "Running provisioning script '$name'..."
-        docker exec --interactive --tty \
-            --user root \
-            --workdir "$mount_point" \
-            "$CONTAINER_NAME" "$mount_point/$name" \
-            || die "provisioning script '$name' exited with an error: container '$CONTAINER_NAME' left running for inspection ('ab root' / 'ab shell'). Destroy it with 'ab destroy' before retrying 'ab create'."
-    done
+    # Run provisioning scripts from provision.d/ as root (see run_scripts_dir
+    # for the naming convention and the "disable via rename" mechanism).
+    # Every script must end with "exit 0": on the first failure, 'ab create'
+    # stops and leaves the container running for inspection.
+    run_scripts_dir "$PWD/provision.d" "/usr/local/provision.d" "provisioning script" --user root \
+        || die "container '$CONTAINER_NAME' left running for inspection ('ab root' / 'ab shell'). Destroy it with 'ab destroy' before retrying 'ab create'."
+
+    # Run startup scripts from home/startup.d/ (if present), as the
+    # unprivileged user -- including on this very first start, right after
+    # provisioning. Unlike provision.d/, this directory is optional and a
+    # failure here never blocks 'ab create': run_scripts_dir already reports
+    # the problem via a warning, so 'ab create' simply carries on.
+    run_scripts_dir "$PWD/home/startup.d" "$effective_home/startup.d" "startup script" \
+        --user "$USERNAME" --env "HOME=$effective_home" || true
 
     echo "Container '$CONTAINER_NAME' ready. Use 'ab shell' or 'ab root'."
 }
@@ -459,6 +571,14 @@ ensure_running() {
     if [ "$state" != "running" ]; then
         echo "The container was stopped: restarting it..."
         docker start "$CONTAINER_NAME" >/dev/null
+
+        # Run startup scripts from home/startup.d/ (if present), as the
+        # unprivileged user, now that the container is actually (re)starting
+        # -- never when it was already running. See run_scripts_dir for the
+        # naming convention; a failure here only produces a warning.
+        local home="/home/$USERNAME"
+        run_scripts_dir "$PWD/home/startup.d" "$home/startup.d" "startup script" \
+            --user "$USERNAME" --env "HOME=$home" || true
     fi
 }
 

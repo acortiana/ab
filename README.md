@@ -77,10 +77,12 @@ to accept it or type an alternative value.
 UID and GID are **not** configurable: they are read at runtime from the user
 running `ab` (`id -u` / `id -g`).
 
-`init` creates the `home/`, `bin/` and `provision.d/` subdirectories (the
-latter pre-populated with a `README.md` and a disabled example script — see
-"Container provisioning" below), the `.env` file (read at runtime) and the
-`.env.example` file (full documentation reference, never read by `ab`).
+`init` creates the `home/`, `bin/` and `provision.d/` subdirectories, plus
+`home/startup.d/` — both `provision.d/` and `home/startup.d/` are
+pre-populated with a `README.md` and a disabled example script (see
+"Container provisioning" and "Container startup scripts" below) — the `.env`
+file (read at runtime) and the `.env.example` file (full documentation
+reference, never read by `ab`).
 
 ## Configuration (`.env`)
 
@@ -147,9 +149,42 @@ install packages, clone repositories, write configuration files, and so on.
 See `provision.d/README.md` (created by `ab init`) for the full naming
 convention and a working example script.
 
+## Container startup scripts (`home/startup.d/`)
+
+Every time `ab` (re)starts the container — the very first `ab create`, right
+after `provision.d/`, and any later restart that `ab shell`/`ab root`
+triggers by finding it stopped — it also runs the scripts found in
+`home/startup.d/`, **as your unprivileged user**, **in alphabetical order**,
+in the foreground and attached to the same terminal. This is the place for
+things that must happen on every boot: starting a background service,
+syncing dotfiles, regenerating host-dependent configuration, and so on.
+
+It follows the same naming convention as `provision.d/` (run-parts style:
+only `[A-Za-z0-9_-]` for active scripts, rename adding a dot-suffix like
+`.disabled` to skip one), but differs from it in three important ways:
+
+- **Runs as your unprivileged user, not root.** `home/` is yours: running
+  arbitrary content from inside it as root would turn any file that lands
+  there into a potential root-execution vector. Need root? Use
+  `provision.d/` instead.
+- **Scripts must be idempotent.** Unlike `provision.d/` (run once, at
+  creation), these can run many times over the container's life.
+- **A failing script only produces a warning** — it never blocks `ab create`,
+  `ab shell` or `ab root`. Locking you out of your own container because a
+  startup script misbehaved would defeat the purpose.
+
+This directory is **optional**: `ab init` creates it, but deleting it is
+fine — `ab` simply skips it. Also note that `ab` can only run these scripts
+when *it* is what (re)starts the container: a direct `docker start` or a
+Docker restart policy would bypass it entirely.
+
+See `home/startup.d/README.md` (created by `ab init`) for the full
+convention and a working example script.
+
 ## Data persistence
 
-- `./home` is mounted at `/home/$USERNAME` inside the container.
+- `./home` is mounted at `/home/$USERNAME` inside the container (its
+  `startup.d/` subdirectory is covered in "Container startup scripts" above).
 - `./bin` is mounted at `/usr/local/bin` (handy for placing scripts/executables).
 - `./provision.d` is mounted at `/usr/local/provision.d` (see "Container
   provisioning" above).

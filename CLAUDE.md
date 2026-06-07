@@ -63,13 +63,32 @@ beyond `docker` and the standard tools of any Linux system.
 - **Host-root guard:** `cmd_create` exits with an error if the host is UID 0,
   because UID 0 would conflict with the container's `root` user during
   provisioning.
-- **`provision.d/` naming convention is run-parts style.** Active script
-  names contain only `[A-Za-z0-9_-]` (matched in `cmd_create` with `case
-  "$name" in *[!A-Za-z0-9_-]*) continue ;; esac`). This single rule does
-  triple duty: alphabetical ordering (hence the `NN-` prefix convention),
-  "disable via rename" (any suffix containing a dot, e.g. `.disabled`, is
-  skipped), and excluding `README.md`/documentation from execution — with no
-  extra special-casing needed.
+- **`provision.d/` and `home/startup.d/` naming convention is run-parts
+  style**, centralized in the `run_scripts_dir` helper (matched with `case
+  "$name" in *[!A-Za-z0-9_-]*) continue ;; esac`). Active script names
+  contain only `[A-Za-z0-9_-]`. This single rule does triple duty:
+  alphabetical ordering (hence the `NN-` prefix convention), "disable via
+  rename" (any suffix containing a dot, e.g. `.disabled`, is skipped), and
+  excluding `README.md`/documentation from execution — with no extra
+  special-casing needed. The same helper's glob-based iteration also makes a
+  missing/optional directory a silent no-op for free (no `[ -d ]` check
+  needed): see `home/startup.d/`.
+- **`provision.d/` runs as root, `home/startup.d/` runs as the unprivileged
+  user — intentionally different.** `provision.d/` exists *for* root-level
+  setup, in a directory only the host project owner populates.
+  `home/startup.d/`, instead, lives inside `home/`, which the container user
+  owns (`USERNAME`/`GROUPNAME` from `.env`): running its content as root
+  would let anything that lands there — even unintentionally — execute as
+  root on the next restart. Hence `run_scripts_dir` is called with `--user
+  root` for one and `--user "$USERNAME" --env HOME=...` for the other.
+- **`home/startup.d/` failures only `warn`, `provision.d/` failures `die`.**
+  A failed one-shot provisioning script means "the container isn't ready",
+  so `cmd_create` aborts and leaves the container for inspection. A failed
+  *recurring* startup script must never lock the user out of `ab shell`/`ab
+  root`/`ab create` — that would be hostile precisely when they need to get
+  in to debug it. `run_scripts_dir` itself stays neutral (it warns and
+  returns non-zero on the first problem); each call site decides whether
+  that's fatal.
 
 ## Conventions when modifying
 
