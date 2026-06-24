@@ -19,7 +19,15 @@ host in `home/`, `bin/` and `provision.d/`.
 
 ## Installation
 
-Copy the `ab` script into a directory in your `PATH` and make it executable:
+Quick install (downloads the latest `ab` into `/usr/local/bin`, needs root):
+
+```sh
+curl --fail --location --silent --show-error \
+  https://raw.githubusercontent.com/acortiana/ab/master/installer.sh | sudo bash
+```
+
+Or do it manually: copy the `ab` script into a directory in your `PATH` and
+make it executable:
 
 ```sh
 install -m 755 ab ~/.local/bin/ab    # or /usr/local/bin/ab
