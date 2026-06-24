@@ -168,15 +168,14 @@ cmd_init() {
     echo "Press Enter to accept the default value shown in brackets."
     echo
 
-    local container_name base_image username groupname container_cmd enable_x11 enable_wayland
+    local container_name base_image username groupname container_cmd enable_x11
     container_name=$(ask "Container name" "$(random_name)")
     base_image=$(ask    "Base image"      "$DEFAULT_IMAGE")
     username=$(ask      "Username"        "$DEFAULT_USER")
     groupname=$(ask     "Groupname"       "$DEFAULT_GROUP")
     container_cmd=$(ask "Startup command" "$DEFAULT_CMD")
 
-    if ask_yes_no "Enable X11 support?";     then enable_x11=true;     else enable_x11=false;     fi
-    if ask_yes_no "Enable Wayland support?"; then enable_wayland=true; else enable_wayland=false; fi
+    if ask_yes_no "Enable X11 support?"; then enable_x11=true; else enable_x11=false; fi
 
     # Persistent subdirectories on the host.
     mkdir --parents home bin provision.d home/startup.d
@@ -206,9 +205,6 @@ CONTAINER_CMD=$(shell_quote "$container_cmd")
 
 # X11 graphical support (true|false).
 ENABLE_X11=$enable_x11
-
-# Wayland graphical support (true|false).
-ENABLE_WAYLAND=$enable_wayland
 EOF
 
     # Full documentation reference file. Never read by ab at runtime.
@@ -255,11 +251,6 @@ CONTAINER_CMD='sleep infinity'
 #   Enable X11 graphical forwarding to the host.
 #   Allowed values: true | false   (Default: false)
 ENABLE_X11=false
-
-# ENABLE_WAYLAND
-#   Enable Wayland graphical forwarding to the host.
-#   Allowed values: true | false   (Default: false)
-ENABLE_WAYLAND=false
 EOF
 
     # README for provision.d/ (documentation only, never read by ab).
@@ -467,14 +458,6 @@ cmd_create() {
             --env "DISPLAY=${DISPLAY:-}"
             --volume "$xauth:$effective_home/.Xauthority:ro"
             --env "XAUTHORITY=$effective_home/.Xauthority"
-        )
-    fi
-    if [ "${ENABLE_WAYLAND:-false}" = "true" ]; then
-        [ -n "${XDG_RUNTIME_DIR:-}" ] || warn "ENABLE_WAYLAND=true but \$XDG_RUNTIME_DIR is not set."
-        run_args+=(
-            --volume "$XDG_RUNTIME_DIR/wayland-0:/run/user/$host_uid/wayland-0"
-            --env "WAYLAND_DISPLAY=wayland-0"
-            --env "XDG_RUNTIME_DIR=/run/user/$host_uid"
         )
     fi
 

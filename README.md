@@ -80,7 +80,6 @@ to accept it or type an alternative value.
 | Groupname       | `mygroup`                            |
 | Startup command | `sleep infinity`                     |
 | Enable X11      | `false`                              |
-| Enable Wayland  | `false`                              |
 
 UID and GID are **not** configurable: they are read at runtime from the user
 running `ab` (`id -u` / `id -g`).
@@ -102,7 +101,6 @@ USERNAME='myuser'          # unprivileged user inside the container
 GROUPNAME='mygroup'        # primary group
 CONTAINER_CMD='sleep infinity'  # main command (PID 1)
 ENABLE_X11=false           # X11 graphical support
-ENABLE_WAYLAND=false       # Wayland graphical support
 ```
 
 Text values are wrapped in single quotes: quote them if they contain spaces or
@@ -127,14 +125,10 @@ this is why `ab shell`/`ab root` also work on images without `bash`
 
 ## Graphical support
 
-Configurable in `.env`, applied by `ab create`. X11 and Wayland are independent
-and can be enabled together.
+Configurable in `.env`, applied by `ab create`.
 
 - **X11** (`ENABLE_X11=true`): mounts `/tmp/.X11-unix` and the `Xauthority`
   file (read-only), and passes `DISPLAY`/`XAUTHORITY`.
-- **Wayland** (`ENABLE_WAYLAND=true`): mounts only the `wayland-0` socket and
-  passes `WAYLAND_DISPLAY`/`XDG_RUNTIME_DIR`. This works because the container
-  uses the same UID as the host.
 
 ## Container provisioning (`provision.d/`)
 
